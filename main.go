@@ -35,6 +35,7 @@ var (
 	p, P    string
 	d, D    string
 	t       string
+	q, Q    string
 	fp      string
 	sheet   string
 )
@@ -54,6 +55,8 @@ func init() {
 	flag.StringVar(&d, "d", "", "database name")
 	flag.StringVar(&d, "D", "", "database name")
 	flag.StringVar(&t, "t", "", "table name")
+	flag.StringVar(&q, "q", "", "Query string")
+	flag.StringVar(&q, "Q", "", "Query string")
 	flag.StringVar(&fp, "fp", "", "full path of the export data")
 	flag.StringVar(&sheet, "sheet", "Sheet1", "sheet name of the excel file")
 
@@ -69,6 +72,7 @@ Options:
 func GetResult() [][]string {
 	//连接字符串
 	var connString string
+	var sqlstr string
 	/*
 		if u == "" || U == "" {
 			connString = fmt.Sprintf("server=%s;port%d;trusted_connection=yes;database=%s", s, port, d)
@@ -88,7 +92,12 @@ func GetResult() [][]string {
 	defer db.Close()
 
 	//通过连接对象执行查询
-	sqlstr := "select * from " + t
+	if t == "" {
+		sqlstr = q
+	} else {
+		sqlstr = "select * from " + t
+	}
+
 	// fmt.Println("sqlstr:", sqlstr)
 	rows, err := db.Query(sqlstr)
 
@@ -176,8 +185,8 @@ func ExportData(data [][]string) {
 	fmt.Println("Export Done!")
 }
 func validation() {
-	if t == "" {
-		panic("-t is not allowed to be empty")
+	if t == "" && q == "" {
+		panic("-t and -q can not both allowed to be empty")
 	}
 	if fp == "" {
 		fmt.Println("-fp:", fp)
