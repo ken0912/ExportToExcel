@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	_ "github.com/denisenkom/go-mssqldb"
 	"github.com/tealeg/xlsx"
@@ -69,7 +70,10 @@ Options:
 `)
 	flag.PrintDefaults()
 }
-func GetResult() [][]string {
+
+var rowChan = make(chan []string, 1024)
+
+func GetResult() {
 	//连接字符串
 	var connString string
 	var sqlstr string
@@ -119,30 +123,38 @@ func GetResult() [][]string {
 
 	}
 
-	var results [][]string
-	results = append(results, columns)
+	// var results [][]string
+	// results = append(results, columns)
+	rowChan <- columns
 	for rows.Next() {
 		err = rows.Scan(scans...)
 		if err != nil {
 			fmt.Println("Failed to scan row", err)
-			return results
+			// return results
 		}
 		row := make([]string, len(columns))
 		for i := range vals {
 			row[i] = string(vals[i])
 		}
-		results = append(results, row)
+		// results = append(results, row)
+		// fmt.Println("row:", row)
+		rowChan <- row
 	}
-	if len(results) == 1 {
-		warning := []string{"no data found!"}
-		results = append(results, warning)
-	}
-	return results
-
+	close(rowChan)
+	/*
+		if len(results) == 1 {
+			warning := []string{"no data found!"}
+			results = append(results, warning)
+		}
+	*/
+	// return results
 }
 
-func ExportData(data [][]string) {
-	var file *xlsx.File
+func ExportData(stop chan bool) {
+	fmt.Println("Export starts")
+
+	streamf := new(xlsx.StreamFile)
+	// var file *xlsx.File
 	var tab *xlsx.Sheet
 	var row *xlsx.Row
 	var err error
@@ -151,38 +163,45 @@ func ExportData(data [][]string) {
 	var defaultFontName = "Calibri"
 	xlsx.SetDefaultFont(defaultFontSize, defaultFontName)
 	if utils.Exists(fp) {
-		file, err = xlsx.OpenFile(fp)
+		streamf.xlsxFile, err = xlsx.OpenFile(fp)
 		if err != nil {
 			panic(err.Error())
 		}
 		//if sheet exists
-		if _, ok := file.Sheet[sheet]; ok {
+		if _, ok := streamf.xlsxFile.Sheet[sheet]; ok {
 			// tab = file.Sheet[sheet]
 			panic("This sheet already exists!")
 		} else {
-			tab, err = file.AddSheet(sheet)
+			tab, err = streamf.xlsxFile.AddSheet(sheet)
 			if err != nil {
 				fmt.Printf(err.Error())
 			}
 		}
 
 	} else {
-		file = xlsx.NewFile()
-		tab, err = file.AddSheet(sheet)
+		streamf.xlsxFile = xlsx.NewFile()
+		tab, err = streamf.xlsxFile.AddSheet(sheet)
 		if err != nil {
 			fmt.Printf(err.Error())
 		}
 	}
-
-	for i := range data {
+	/*
+		for i := range data {
+			row = tab.AddRow()
+			row.WriteSlice(&data[i], -1)
+		}
+	*/
+	for r := range rowChan {
 		row = tab.AddRow()
-		row.WriteSlice(&data[i], -1)
+		// fmt.Println("r:", r)
+		row.WriteSlice(&r, -1)
 	}
-	err = file.Save(fp)
+
+	err = streamf.xlsxFile.Save(fp)
 	if err != nil {
 		fmt.Printf(err.Error())
 	}
-	fmt.Println("Export Done!")
+	stop <- true
 }
 func validation() {
 	if t == "" && q == "" {
@@ -208,6 +227,18 @@ func main() {
 		return
 	}
 	validation()
-	data := GetResult()
-	ExportData(data)
+
+	stop := make(chan bool)
+	go GetResult()
+	go ExportData(stop)
+
+	for {
+		select {
+		case <-stop:
+			fmt.Println("Export Done!")
+			return
+		default:
+			time.Sleep(1 * time.Second)
+		}
+	}
 }
