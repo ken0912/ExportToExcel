@@ -10,7 +10,7 @@ import (
 	"time"
 
 	_ "github.com/denisenkom/go-mssqldb"
-	"github.com/tealeg/xlsx"
+	excelize "github.com/xuri/excelize/v2"
 )
 
 /*
@@ -71,7 +71,7 @@ Options:
 	flag.PrintDefaults()
 }
 
-var rowChan = make(chan []string, 1024)
+var rowChan = make(chan []interface{}, 1024)
 
 func GetResult() {
 	//连接字符串
@@ -109,8 +109,11 @@ func GetResult() {
 		log.Fatal("Query failed:", err.Error())
 	}
 	defer rows.Close()
-
 	columns, err := rows.Columns()
+	columnsInterface := make([]interface{}, len(columns))
+	for i, column := range columns {
+		columnsInterface[i] = column
+	}
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -125,14 +128,14 @@ func GetResult() {
 
 	// var results [][]string
 	// results = append(results, columns)
-	rowChan <- columns
+	rowChan <- columnsInterface
 	for rows.Next() {
 		err = rows.Scan(scans...)
 		if err != nil {
 			fmt.Println("Failed to scan row", err)
 			// return results
 		}
-		row := make([]string, len(columns))
+		row := make([]interface{}, len(columns))
 		for i := range vals {
 			row[i] = string(vals[i])
 		}
@@ -141,65 +144,65 @@ func GetResult() {
 		rowChan <- row
 	}
 	close(rowChan)
-	/*
-		if len(results) == 1 {
-			warning := []string{"no data found!"}
-			results = append(results, warning)
-		}
-	*/
-	// return results
+
 }
 
 func ExportData(stop chan bool) {
 	fmt.Println("Export starts")
 
-	streamf := new(xlsx.StreamFile)
-	// var file *xlsx.File
-	var tab *xlsx.Sheet
-	var row *xlsx.Row
+	var file *excelize.File
+	var streamWriter *excelize.StreamWriter
 	var err error
-	//if the file already exists
-	var defaultFontSize = 11
-	var defaultFontName = "Calibri"
-	xlsx.SetDefaultFont(defaultFontSize, defaultFontName)
 	if utils.Exists(fp) {
-		streamf.xlsxFile, err = xlsx.OpenFile(fp)
+		file, err = excelize.OpenFile(fp)
 		if err != nil {
 			panic(err.Error())
 		}
-		//if sheet exists
-		if _, ok := streamf.xlsxFile.Sheet[sheet]; ok {
-			// tab = file.Sheet[sheet]
-			panic("This sheet already exists!")
-		} else {
-			tab, err = streamf.xlsxFile.AddSheet(sheet)
-			if err != nil {
-				fmt.Printf(err.Error())
+		if sheetIndex := file.GetSheetIndex(sheet); sheetIndex == -1 {
+			if idx := file.NewSheet(sheet); idx == -1 {
+				fmt.Println("NewSheet error")
+				return
 			}
+			streamWriter, err = file.NewStreamWriter(sheet)
+			if err != nil {
+				fmt.Println("NewStreamWriter err:", err)
+				return
+			}
+		} else {
+			panic("This sheet already exists!")
 		}
 
 	} else {
-		streamf.xlsxFile = xlsx.NewFile()
-		tab, err = streamf.xlsxFile.AddSheet(sheet)
-		if err != nil {
-			fmt.Printf(err.Error())
-		}
-	}
-	/*
-		for i := range data {
-			row = tab.AddRow()
-			row.WriteSlice(&data[i], -1)
-		}
-	*/
-	for r := range rowChan {
-		row = tab.AddRow()
-		// fmt.Println("r:", r)
-		row.WriteSlice(&r, -1)
-	}
+		file = excelize.NewFile()
 
-	err = streamf.xlsxFile.Save(fp)
-	if err != nil {
-		fmt.Printf(err.Error())
+		file.DeleteSheet(sheet)
+
+		if idx := file.NewSheet(sheet); idx == -1 {
+			fmt.Println("idx:", idx)
+			fmt.Println("NewSheet error")
+			return
+		}
+		if sheet == "sheet1" {
+			sheet = "Sheet1"
+		}
+		streamWriter, err = file.NewStreamWriter(sheet)
+		if err != nil {
+			fmt.Println(err)
+		}
+	}
+	rowID := 1
+	for row := range rowChan {
+		cell, _ := excelize.CoordinatesToCellName(1, rowID)
+		if err := streamWriter.SetRow(cell, row); err != nil {
+			fmt.Println(err)
+		}
+		rowID += 1
+	}
+	if err := streamWriter.Flush(); err != nil {
+		fmt.Println(err)
+	}
+	if err := file.SaveAs(fp); err != nil {
+		fmt.Println(err)
 	}
 	stop <- true
 }
